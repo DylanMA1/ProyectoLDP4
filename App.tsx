@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from "react";
-import { StatusBar } from "expo-status-bar";
 import { StyleSheet } from "react-native";
 import {
   NativeBaseProvider,
@@ -8,20 +7,20 @@ import {
   View,
   Text,
   Select,
-  CheckIcon,
   ScrollView,
   HStack,
   VStack,
   Box,
   useToast,
 } from "native-base";
-import { getSeats, checkAvailability } from "./hooks/useDatabase";
+import { getSeats, checkAvailability, updateSeat } from "./hooks/useDatabase";
 import { SafeAreaView } from "react-native-safe-area-context";
+import supabase from "./services/supabaseClient";
+import SimulatedPaymentPlugin from "./components/simulatedPaymentPlugin";
 
 interface Seat {
   id: number;
-  reserved: boolean;
-  sold: boolean;
+  state: string;
 }
 
 interface Zone {
@@ -54,6 +53,74 @@ export default function App() {
     fetchSeats();
   }, []);
 
+  useEffect(() => {
+    const channel = supabase
+      .channel("seats-channel")
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "seats",
+        },
+        (payload) => {
+          const updatedSeat = payload.new as Seat;
+          setSeats((prevSeats) => {
+            return prevSeats.map((category) => ({
+              ...category,
+              zones: category.zones.map((zone) => ({
+                ...zone,
+                seats: zone.seats.map((seat) =>
+                  seat.id === updatedSeat.id
+                    ? { ...seat, state: updatedSeat.state }
+                    : seat
+                ),
+              })),
+            }));
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  const handleSuccess = async () => {
+    console.log("Pago exitoso");
+  
+    for (let seatId of selectedSeats) {
+      await updateSeat(seatId, "Comprado");
+    }
+  
+    setSeats((prevSeats) => {
+      return prevSeats.map((category) => ({
+        ...category,
+        zones: category.zones.map((zone) => ({
+          ...zone,
+          seats: zone.seats.map((seat) =>
+            selectedSeats.has(seat.id)
+              ? { ...seat, state: "Comprado" }
+              : seat
+          ),
+        })),
+      }));
+    });
+  
+    toast.show({
+      title: "Asientos actualizados",
+      description: "Todos los asientos seleccionados han sido liberados.",
+      variant: "solid",
+      duration: 3000,
+    });
+  };
+  
+
+  const handleFailure = () => {
+    console.log("Pago fallido");
+  };
+
   const handleCheckAvailability = async () => {
     if (category && quantity) {
       const numericQuantity = parseInt(quantity, 10);
@@ -83,16 +150,13 @@ export default function App() {
       const updatedSeats = new Set(prevSelectedSeats);
       if (updatedSeats.has(seatId)) {
         updatedSeats.delete(seatId);
+        updateSeat(seatId, "Libre");
       } else {
         updatedSeats.add(seatId);
+        updateSeat(seatId, "No disponible");
       }
       return updatedSeats;
     });
-  };
-
-  const handlePurchase = () => {
-    alert(`Se han comprado ${selectedSeats.size} asientos.`);
-    setSelectedSeats(new Set());
   };
 
   const renderSeats = () => {
@@ -112,6 +176,7 @@ export default function App() {
       return availableZone ? "lightgreen" : "gray.200";
     };
 
+    
     return seats.map((category) => (
       <ScrollView
         key={category.id}
@@ -127,7 +192,12 @@ export default function App() {
                 bgColor={getZoneBackgroundColor(zone.name, "VIP")}
                 padding={1}
               >
-                <Text fontSize="md" fontWeight="semibold" color="gray.500">
+                <Text
+                  marginLeft={2}
+                  fontSize="md"
+                  fontWeight="semibold"
+                  color="gray.500"
+                >
                   Zona: {zone.name}
                 </Text>
                 <HStack space={3}>
@@ -144,13 +214,14 @@ export default function App() {
                             .slice(rowIndex * 5, rowIndex * 5 + 5)
                             .map((seat: Seat) => {
                               const isSelected = selectedSeats.has(seat.id);
-                              const seatBgColor = seat.sold
-                                ? "red.500"
-                                : seat.reserved
-                                ? "yellow.400"
-                                : isSelected
+                              const seatBgColor = isSelected
                                 ? "green.500"
-                                : "yellow.600";
+                                : category.name === "VIP"
+                                ? "yellow.400"
+                                : "red.500";
+
+                              const isDisabled =
+                                seat.state !== "Libre" && !isSelected;
 
                               return (
                                 <Button
@@ -158,7 +229,7 @@ export default function App() {
                                   width={10}
                                   height={10}
                                   bg={seatBgColor}
-                                  isDisabled={seat.sold || seat.reserved}
+                                  isDisabled={isDisabled}
                                   onPress={() => toggleSeatSelection(seat.id)}
                                 >
                                   {seat.id}
@@ -182,6 +253,7 @@ export default function App() {
                 >
                   <Text color="white">Estadio</Text>
                 </Box>
+
                 <Box
                   bgColor={getZoneBackgroundColor(zone.name, "General")}
                   padding={1}
@@ -209,13 +281,14 @@ export default function App() {
                                 .slice(rowIndex * 5, rowIndex * 5 + 5)
                                 .map((seat: Seat) => {
                                   const isSelected = selectedSeats.has(seat.id);
-                                  const seatBgColor = seat.sold
-                                    ? "red.500"
-                                    : seat.reserved
-                                    ? "yellow.400"
-                                    : isSelected
+                                  const seatBgColor = isSelected
                                     ? "green.500"
-                                    : "brown";
+                                    : category.name === "VIP"
+                                    ? "yellow.400"
+                                    : "red.500";
+
+                                  const isDisabled =
+                                    seat.state !== "Libre" && !isSelected;
 
                                   return (
                                     <Button
@@ -223,7 +296,7 @@ export default function App() {
                                       width={10}
                                       height={10}
                                       bg={seatBgColor}
-                                      isDisabled={seat.sold || seat.reserved}
+                                      isDisabled={isDisabled}
                                       onPress={() =>
                                         toggleSeatSelection(seat.id)
                                       }
@@ -256,48 +329,35 @@ export default function App() {
               selectedValue={category}
               minWidth="200"
               placeholder="Seleccione una categoria"
-              onValueChange={(value) => setCategory(value)}
-              _selectedItem={{
-                bg: "teal.600",
-                endIcon: <CheckIcon size={5} />,
-              }}
+              onValueChange={setCategory}
             >
-              <Select.Item label="General" value="General" />
-              <Select.Item label="VIP" value="VIP" />
+              {seats.map((category) => (
+                <Select.Item
+                  key={category.id}
+                  label={category.name}
+                  value={category.name}
+                />
+              ))}
             </Select>
 
             <Input
-              placeholder="Cantidad de entradas"
+              placeholder="Cantidad de asientos"
               value={quantity}
-              keyboardType="numeric"
               onChangeText={setQuantity}
+              keyboardType="numeric"
             />
-
             <Button onPress={handleCheckAvailability}>
-              Verificar Disponibilidad
+              Consultar disponibilidad
             </Button>
+
+            <SimulatedPaymentPlugin.renderForm onSuccess={() => handleSuccess()} onFailure={handleFailure} />
+
+            {renderSeats()}
           </VStack>
-
-          {renderSeats()}
-
-          {selectedSeats.size > 0 && (
-            <Button onPress={handlePurchase} mt={4} colorScheme="blue">
-              Comprar {selectedSeats.size} Asientos
-            </Button>
-          )}
-
-          <StatusBar style="auto" />
         </ScrollView>
       </SafeAreaView>
     </NativeBaseProvider>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#fff",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-});
+const styles = StyleSheet.create({});
