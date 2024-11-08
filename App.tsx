@@ -43,6 +43,7 @@ export default function App() {
   const [quantity, setQuantity] = useState<string>("");
   const [availability, setAvailability] = useState<any>([]);
   const [selectedSeats, setSelectedSeats] = useState<Set<number>>(new Set());
+  const [forceRenderCount, setForceRenderCount] = useState(0);
   const toast = useToast();
 
   useEffect(() => {
@@ -51,7 +52,7 @@ export default function App() {
       setSeats(seatData);
     };
     fetchSeats();
-  }, []);
+  }, [seats]);
 
   useEffect(() => {
     const channel = supabase
@@ -64,9 +65,10 @@ export default function App() {
           table: "seats",
         },
         (payload) => {
+          console.log("Asiento actualizado");
           const updatedSeat = payload.new as Seat;
           setSeats((prevSeats) => {
-            return prevSeats.map((category) => ({
+            const updatedSeats = prevSeats.map((category) => ({
               ...category,
               zones: category.zones.map((zone) => ({
                 ...zone,
@@ -77,6 +79,10 @@ export default function App() {
                 ),
               })),
             }));
+
+            setForceRenderCount((prevCount) => prevCount + 1);
+
+            return updatedSeats;
           });
         }
       )
@@ -89,25 +95,23 @@ export default function App() {
 
   const handleSuccess = async () => {
     console.log("Pago exitoso");
-  
+
     for (let seatId of selectedSeats) {
       await updateSeat(seatId, "Comprado");
     }
-  
+
     setSeats((prevSeats) => {
       return prevSeats.map((category) => ({
         ...category,
         zones: category.zones.map((zone) => ({
           ...zone,
           seats: zone.seats.map((seat) =>
-            selectedSeats.has(seat.id)
-              ? { ...seat, state: "Comprado" }
-              : seat
+            selectedSeats.has(seat.id) ? { ...seat, state: "Comprado" } : seat
           ),
         })),
       }));
     });
-  
+
     toast.show({
       title: "Asientos actualizados",
       description: "Todos los asientos seleccionados han sido liberados.",
@@ -115,7 +119,6 @@ export default function App() {
       duration: 3000,
     });
   };
-  
 
   const handleFailure = () => {
     console.log("Pago fallido");
@@ -176,7 +179,6 @@ export default function App() {
       return availableZone ? "lightgreen" : "gray.200";
     };
 
-    
     return seats.map((category) => (
       <ScrollView
         key={category.id}
@@ -350,7 +352,10 @@ export default function App() {
               Consultar disponibilidad
             </Button>
 
-            <SimulatedPaymentPlugin.renderForm onSuccess={() => handleSuccess()} onFailure={handleFailure} />
+            <SimulatedPaymentPlugin.renderForm
+              onSuccess={() => handleSuccess()}
+              onFailure={handleFailure}
+            />
 
             {renderSeats()}
           </VStack>
